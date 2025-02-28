@@ -3255,7 +3255,7 @@ endif
 ifneq "$(HOSTARCH)" "x86_64"
 /root/XCVMKit-OS/output/build/buildroot-config/auto.conf: FORCE
 endif
-ifneq "$(BR2_VERSION_FULL)" "-g9173dd9f"
+ifneq "$(BR2_VERSION_FULL)" "-gbdd86d74-dirty"
 /root/XCVMKit-OS/output/build/buildroot-config/auto.conf: FORCE
 endif
 
