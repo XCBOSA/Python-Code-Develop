@@ -1,6 +1,6 @@
 #
 # Automatically generated file; DO NOT EDIT.
-# Buildroot -gbdd86d74-dirty Configuration
+# Buildroot -g4ece861f-dirty Configuration
 #
 BR2_HAVE_DOT_CONFIG=y
 BR2_HOST_GCC_AT_LEAST_4_9=y
@@ -457,10 +457,6 @@ BR2_PACKAGE_FFMPEG_ARCH_SUPPORTS=y
 # BR2_PACKAGE_JACK1 is not set
 # BR2_PACKAGE_JACK2 is not set
 BR2_PACKAGE_KODI_ARCH_SUPPORTS=y
-
-#
-# kodi needs python3 w/ .py modules, a uClibc or glibc toolchain w/ C++, threads, wchar, dynamic library, gcc >= 9.x
-#
 
 #
 # kodi needs udev support for gbm
@@ -1189,8 +1185,8 @@ BR2_PACKAGE_HOST_OPENJDK_BIN_ARCH_SUPPORTS=y
 BR2_PACKAGE_PHP_ARCH_SUPPORTS=y
 # BR2_PACKAGE_PHP is not set
 BR2_PACKAGE_PYTHON3=y
-# BR2_PACKAGE_PYTHON3_PY_ONLY is not set
-BR2_PACKAGE_PYTHON3_PYC_ONLY=y
+BR2_PACKAGE_PYTHON3_PY_ONLY=y
+# BR2_PACKAGE_PYTHON3_PYC_ONLY is not set
 # BR2_PACKAGE_PYTHON3_PY_PYC is not set
 
 #
