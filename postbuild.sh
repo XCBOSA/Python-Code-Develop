@@ -12,7 +12,7 @@ for file in `ls post_sbin`
     do
         filePath="post_sbin/"$file
         if [ -f $filePath ]; then
-            gccout="output/images/rootfs"${file%".c"}
+            gccout="output/images/rootfs/"${file%".c"}
             if [ -f $gccout ]; then
                 rm $gccout
             fi
