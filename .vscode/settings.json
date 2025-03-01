@@ -1,0 +1,10 @@
+{
+    "files.associations": {
+        "cstdio": "cpp",
+        "locale": "cpp",
+        "stat.h": "c",
+        "pthread.h": "c",
+        "stdbool.h": "c",
+        "ioctl.h": "c"
+    }
+}
