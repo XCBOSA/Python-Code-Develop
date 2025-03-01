@@ -19,4 +19,5 @@ for file in `ls post_sbin`
             $GCC $filePath -o $gccout -O2
         fi
     done
-tar -vcjf output/images/rootfs.tar -C output/images/rootfs/*
+cd output/images
+tar -vcjf rootfs.tar rootfs/*
