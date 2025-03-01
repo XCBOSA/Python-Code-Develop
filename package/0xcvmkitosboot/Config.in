@@ -1,0 +1,4 @@
+config BR2_PACKAGE_0xcvmkitosboot
+    bool "0xcvmkitosboot"
+    help
+        XCVMKitOSBootLoader
