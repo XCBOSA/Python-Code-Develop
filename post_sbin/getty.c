@@ -20,7 +20,7 @@
 #define VMP_DEVICE_TX "/etc/.vmpdrvfna_tx"
 #define VMP_TID_MAX 64
 #define VMP_TX_POOL_SIZE 64
-#define VMP_STRBUF_LEN 128
+#define VMP_STRBUF_LEN 256
 
 typedef struct {
     short width;
@@ -31,6 +31,7 @@ typedef struct {
 
 typedef enum {
     rx_command_type_runproc,
+    rx_command_type_runpipe,
     rx_command_type_killproc,
     rx_command_type_lsproc,
     rx_command_type_sstdin,
@@ -77,6 +78,10 @@ typedef struct {
     int slave_pty;
     FD stdin_fd;
     rx_command_win_size win_size;
+    int use_pipe;
+    pipe_t pipe_in;
+    pipe_t pipe_out;
+    FD stdout_fd;
 } management_process;
 
 void debug_print_rx(rx_command rx) {
@@ -124,6 +129,7 @@ void tx_push(tx_command cmd) {
 
 #define CB_SUCC "succ"
 #define CB_NO_TID "no_tid"
+#define CB_NO_PIPE "no_pipe"
 #define CB_NO_PTY "no_pty"
 #define CB_TID_KILLED "tid_killed"
 #define CT_LAUNCH_FAIL "launch_fail"
@@ -142,7 +148,7 @@ void tx_push(tx_command cmd) {
 }
 #define CB_PUSH(pmagic, pterror, reason) CT_PUSH(tx_command_type_cb, pmagic, 0, pterror, reason)
 
-void *mproc_io_thread(management_process *mproc) {
+void *mproc_io_thread_pty(management_process *mproc) {
     char slave_name[256];
     if (openpty(&mproc->master_pty, &mproc->slave_pty, 
                slave_name, NULL, &mproc->win_size) == -1) {
@@ -248,6 +254,93 @@ void *mproc_io_thread(management_process *mproc) {
     return NULL;
 }
 
+void *mproc_io_thread_pipe(management_process *mproc) {
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_addclose(&actions, mproc->pipe_in[1]);
+    posix_spawn_file_actions_addclose(&actions, mproc->pipe_out[0]);
+    posix_spawn_file_actions_adddup2(&actions, mproc->pipe_in[0], STDIN_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, mproc->pipe_out[1], STDOUT_FILENO);
+    char *const argv[] = {
+        "/bin/sh", "-c", mproc->command, NULL
+    };
+    char *const environment[] = {
+        NULL
+    };
+    int ret = posix_spawnp(&mproc->pid, argv[0], &actions, NULL, argv, environment);
+    posix_spawn_file_actions_destroy(&actions);
+    pthread_mutex_unlock(&processes_lock);
+    
+    if (ret != 0) {
+        close(mproc->pipe_in[0]);
+        close(mproc->pipe_in[1]);
+        close(mproc->pipe_out[0]);
+        close(mproc->pipe_out[1]);
+        CT_PUSH(tx_command_type_stoped, ret, mproc->tid, 1, CT_LAUNCH_FAIL);
+        mproc->inuse = 0;
+        return NULL;
+    }
+
+    close(mproc->pipe_in[0]);
+    close(mproc->pipe_out[1]);
+    mproc->stdin_fd = mproc->pipe_in[1];
+    mproc->stdout_fd = mproc->pipe_out[0];
+    int flags = fcntl(mproc->stdout_fd, F_GETFL, 0);
+    fcntl(mproc->stdout_fd, F_SETFL, flags | O_NONBLOCK);
+
+    char buf[VMP_STRBUF_LEN];
+    ssize_t nread = 0;
+    const char *exit_reason = "unknown";
+    int8_t exit_error = 0;
+    int64_t exit_magic = 0;
+    while (1) {
+        do {
+            bzero(buf, sizeof(buf));
+            nread = read(mproc->stdout_fd, buf, sizeof(buf));
+            if (nread > 0) {
+                tx_command cmd = {
+                    .type = tx_command_type_stdout,
+                    .tid = mproc->tid,
+                    .error = 0,
+                    .magic = 0,
+                    .sstdout_len = nread
+                };
+                bzero(&cmd.sstdout[0], VMP_STRBUF_LEN);
+                memcpy(cmd.sstdout, buf, nread);
+                tx_push(cmd);
+            }
+        }
+        while (nread == sizeof(buf)); // has next unread
+
+        int pid_status;
+        pid_t result = waitpid(mproc->pid, &pid_status, WNOHANG);
+        if (result == -1) {
+            exit_reason = "err_waitpid";
+            break;
+        }
+        if (result != 0) {
+            if (WIFEXITED(pid_status)) {
+                exit_reason = "normal";
+                exit_magic = WEXITSTATUS(pid_status);
+            }
+            else if (WIFSIGNALED(pid_status)) {
+                exit_reason = "sig";
+                exit_error = WIFSIGNALED(pid_status);
+            }
+            else {
+                exit_reason = "exit_unknown";
+            }
+            break;
+        }
+        usleep(100);
+    }
+
+    close(mproc->stdin_fd);
+    close(mproc->stdout_fd);
+    CT_PUSH(tx_command_type_stoped, exit_magic, mproc->tid, exit_error, exit_reason);
+    mproc->inuse = 0;
+}
+
 int8_t find_unused_mproc_nolock() {
     for (int8_t tid = 0; tid < VMP_TID_MAX; tid++) {
         if (!processes[tid].inuse) {
@@ -278,9 +371,41 @@ void rx_process(rx_command cmd) {
             mproc.inuse = 1;
             processes[tid] = mproc;
             mproc.win_size = cmd.win_size;
+            mproc.use_pipe = 0;
 
             CT_PUSH(tx_command_type_cb, cmd.magic, tid, 0, CB_SUCC);
-            pthread_create(&mproc.io_thread, NULL, &mproc_io_thread, &processes[tid]);
+            pthread_create(&mproc.io_thread, NULL, &mproc_io_thread_pty, &processes[tid]);
+            // processes_lock will unlock in mproc_io_thread
+            break;
+        }
+        case rx_command_type_runpipe: {
+            pthread_mutex_lock(&processes_lock);
+            int8_t tid = find_unused_mproc_nolock();
+            if (tid < 0) {
+                pthread_mutex_unlock(&processes_lock);
+                CB_PUSH(cmd.magic, 1, CB_NO_TID);
+                break;
+            }
+            
+            management_process mproc;
+            bzero(&mproc, sizeof(management_process));
+            memcpy(&mproc.command[0], cmd.sstdin, sizeof(mproc.command));
+            if (pipe(mproc.pipe_in) == -1 || pipe(mproc.pipe_out) == -1) {
+                pthread_mutex_unlock(&processes_lock);
+                close(mproc.pipe_in[0]);
+                close(mproc.pipe_in[1]);
+                close(mproc.pipe_out[0]);
+                close(mproc.pipe_out[1]);
+                CB_PUSH(cmd.magic, 1, CB_NO_PIPE);
+                break;
+            }
+            
+            mproc.tid = tid;
+            mproc.inuse = 1;
+            processes[tid] = mproc;
+            mproc.use_pipe = 1;
+            CT_PUSH(tx_command_type_cb, cmd.magic, tid, 0, CB_SUCC);
+            pthread_create(&mproc.io_thread, NULL, &mproc_io_thread_pipe, &processes[tid]);
             // processes_lock will unlock in mproc_io_thread
             break;
         }
@@ -351,7 +476,9 @@ void rx_process(rx_command cmd) {
                 CB_PUSH(cmd.magic, 1, CB_TID_KILLED);
                 break;
             }
-            ioctl(mproc->stdin_fd, TIOCGWINSZ, &cmd.win_size);
+            if (!mproc->use_pipe) {
+                ioctl(mproc->stdin_fd, TIOCGWINSZ, &cmd.win_size);
+            }
             pthread_mutex_unlock(&processes_lock);
             CB_PUSH(cmd.magic, 0, CB_SUCC);
             break;
@@ -369,11 +496,11 @@ int main() {
     RX = open(VMP_DEVICE_RX, 1101824);
     TX = open(VMP_DEVICE_TX, 1101825);
     if (RX < 0) {
-        printf("vmp: unable to open rx");
+        printf("XCVMKit-OS: unable to connect with host.\n");
         return -1;
     }
     if (TX < 0) {
-        printf("vmp: unable to open tx");
+        printf("XCVMKit-OS: unable to connect with host.\n");
         return -1;
     }
     pthread_mutex_init(&tx_lock, NULL);
