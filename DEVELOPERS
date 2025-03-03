@@ -3253,3 +3253,7 @@ F:	package/quazip/
 F:	package/shapelib/
 F:	package/simple-mail/
 F:	package/tinc/
+
+N:  Xing Cheng <xcbosa@forgetive.org>
+F:  package/0xcvmkitosboot/
+F:  post_sbin/*
